@@ -29,7 +29,10 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def formatar_numero(valor):
-    return f"{float(valor):.2f}".replace('.', ',')  # Converte corretamente para 2 casas decimais
+    try:
+        return round(float(valor.replace(',', '.')), 2)  # Converte para float corretamente
+    except ValueError:
+        return None  # Retorna None para valores inválidos
 
 @routes.route('/', methods=['GET', 'POST'])
 def index():
@@ -69,11 +72,15 @@ def index():
                         valor = formatar_numero(row[2])
                         unidade = row[3]
                         
+                        if valor is None:
+                            flash(f'Erro: valor inválido {row[2]} na linha {row}', 'error')
+                            continue
+                        
                         produto = Produto(id=int(id_produto), codigo=id_produto, descricao=descricao, valor=valor, unidade=unidade)
                         db_session.add(produto)
                         produtos.append(produto)
-                    except (ValueError, IndexError):
-                        flash(f'Erro ao processar linha: {row}', 'error')
+                    except (ValueError, IndexError) as e:
+                        flash(f'Erro ao processar linha: {row} - {str(e)}', 'error')
                         continue  
                 
                 if produtos:
