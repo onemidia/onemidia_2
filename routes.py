@@ -61,47 +61,23 @@ def index():
                     produtos = []
                     db = get_db()
 
-                    # Define um timeout maior para o banco
-                    db.execute("SET statement_timeout TO 30000;")
-
-                    # Deleta os produtos antigos apenas se houver novos para inserir
-                    db.query(Produto).delete()
-                    db.commit()
+                    db_session.execute("SET statement_timeout TO 30000;")  # Timeout do banco para 30s
+                    db_session.query(Produto).delete()
+                    db_session.commit()
 
                     for row in reader:
-                        if len(row) != 4:  # Verifica se a linha tem os campos necessários
-                            continue  # Ignora linhas incompletas
-
                         try:
                             id_produto = row[0].zfill(10)  # Mantém zeros à esquerda
                             descricao = row[1]
                             valor = formatar_numero(row[2])  # Formata o valor corretamente
                             unidade = row[3]
 
-                            if valor is None:
-                                raise ValueError(f"Erro ao processar valor: {row[2]}")  # Erro no preço
-
-                            produto = Produto(
-                                id=int(id_produto),
-                                codigo=id_produto,
-                                descricao=descricao,
-                                valor=valor,
-                                unidade=unidade
-                            )
-
-                            db.add(produto)
-                            produtos.append(produto)
-
-                        except ValueError as e:
-                            print(f"Erro ao processar linha {row}: {e}")  # Log do erro
-                            continue  # Continua com as outras linhas sem interromper tudo
-
-                    if produtos:
-                        db.commit()
-                        cache.delete('produtos_cache')  # Limpa o cache ao atualizar os produtos
-                        flash('Arquivo enviado e atualizado com sucesso!', 'success')
-                    else:
-                        flash('Nenhum produto processado. Verifique o arquivo.', 'warning')
+                            produto = Produto(id=int(id_produto), codigo=id_produto, descricao=descricao, valor=valor, unidade=unidade)
+                            db_session.add(produto)
+                        except ValueError:
+                            flash('Erro ao processar linha do arquivo. Verifique o formato.', 'error')
+                            db_session.rollback()
+                            break   
 
                     db.close()
 
