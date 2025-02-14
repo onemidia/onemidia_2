@@ -25,16 +25,10 @@ ALLOWED_EXTENSIONS = {'txt'}
 routes = Blueprint("routes", __name__)
 
 def allowed_file(filename):
-    """ Verifica se o arquivo tem uma extensão permitida """
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# Função para formatar os números corretamente
 def formatar_numero(valor):
-    """ Converte valores decimais para formato correto """
-    try:
-        return f"{float(valor):.2f}".replace('.', ',')  # Exemplo: "59.99" -> "59,99"
-    except ValueError:
-        return None  # Retorna None se a conversão falhar
+    return f"{float(valor):.2f}".replace('.', ',')  # Converte para 2 casas decimais e usa vírgula
 
 # Rota principal para upload de arquivos
 @routes.route('/', methods=['GET', 'POST'])
@@ -52,73 +46,78 @@ def index():
         if arquivo and allowed_file(arquivo.filename):
             filename = secure_filename(arquivo.filename)
             os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-            filepath = os.path.join(UPLOAD_FOLDER, filename)
-            arquivo.save(filepath)
+            caminho_arquivo = os.path.join(UPLOAD_FOLDER, filename)
+            arquivo.save(caminho_arquivo)
 
             try:
-                with open(filepath, 'r', encoding='utf-8') as file:
+                with open(caminho_arquivo, 'r', encoding='utf-8') as file:
                     reader = csv.reader(file, delimiter=';')
                     produtos = []
-                    db = get_db()
-
-                    db_session.execute("SET statement_timeout TO 30000;")  # Timeout do banco para 30s
+                    
+                    db_session = next(get_db())  # Obtém a sessão corretamente
+                    db_session.execute("SET statement_timeout TO 30000;")  # Define o timeout
                     db_session.query(Produto).delete()
                     db_session.commit()
-
+                    
                     for row in reader:
                         try:
                             id_produto = row[0].zfill(10)  # Mantém zeros à esquerda
                             descricao = row[1]
-                            valor = formatar_numero(row[2])  # Formata o valor corretamente
+                            valor = formatar_numero(row[2])  # Formata corretamente
                             unidade = row[3]
 
-                            produto = Produto(id=int(id_produto), codigo=id_produto, descricao=descricao, valor=valor, unidade=unidade)
+                            produto = Produto(
+                                id=int(id_produto),
+                                codigo=id_produto,
+                                descricao=descricao,
+                                valor=valor,
+                                unidade=unidade
+                            )
                             db_session.add(produto)
-                        except ValueError:
-                            flash('Erro ao processar linha do arquivo. Verifique o formato.', 'error')
-                            db_session.rollback()
-                            break   
+                            produtos.append(produto)
 
-                    db.close()
-
+                        except (ValueError, IndexError) as e:
+                            flash(f'Erro ao processar linha {row}: {str(e)}', 'error')
+                            continue  # Pula a linha com erro e continua
+                    
+                    if produtos:
+                        db_session.commit()
+                        cache.delete('produtos_cache')  # Limpa o cache ao atualizar
+                        flash('Arquivo enviado e atualizado com sucesso!', 'success')
+                    else:
+                        flash('Nenhum produto processado. Verifique o arquivo.', 'warning')
+                    
             except Exception as e:
-                flash(f"Erro no processamento: {e}", 'error')
-                print(f"Erro geral: {e}")
-
-            return redirect(url_for('routes.index'))
+                db_session.rollback()
+                flash(f'Erro no processamento: {str(e)}', 'error')
+                return redirect(url_for('routes.index'))
 
     return render_template('index.html')
 
 # Rota para obter produtos com paginação e cache
 @routes.route('/produtos', methods=['GET'])
-@cache.cached(timeout=60, key_prefix='produtos_cache')  # Cache de 60 segundos
+@cache.cached(timeout=60, key_prefix='produtos_cache')
 def get_produtos():
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 10, type=int)
-
-    try:
-        db = get_db()
-        db.execute("SET statement_timeout TO 30000;")  # Timeout do banco para 30s
-        produtos = db.query(Produto).limit(per_page).offset((page - 1) * per_page).all()
-
-        db.close()
-
-        return jsonify([
-            {
-                'id': produto.id,
-                'codigo': produto.codigo,
-                'descricao': produto.descricao,
-                'valor': produto.valor,
-                'unidade': produto.unidade
-            } for produto in produtos
-        ])
-
-    except Exception as e:
-        return jsonify({"error": f"Erro ao buscar produtos: {str(e)}"}), 500
+    
+    db_session = next(get_db())
+    db_session.execute("SET statement_timeout TO 30000;")
+    produtos = db_session.query(Produto).limit(per_page).offset((page - 1) * per_page).all()
+    
+    return jsonify([
+        {
+            'id': produto.id,
+            'codigo': produto.codigo,
+            'descricao': produto.descricao,
+            'valor': produto.valor,
+            'unidade': produto.unidade
+        } for produto in produtos
+    ])
 
 # Registra o Blueprint no Flask
 app.register_blueprint(routes)
 
 # Executa a aplicação
 if __name__ == '__main__':
-    app.run(debug=True, threaded=True)  # Ativa threads para melhor desempenho
+    app.run(debug=True, threaded=True)
