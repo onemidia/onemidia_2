@@ -4,6 +4,7 @@ from flask import Flask, Blueprint, request, jsonify, flash, redirect, url_for, 
 from flask_caching import Cache
 from werkzeug.serving import WSGIRequestHandler
 from werkzeug.utils import secure_filename
+from sqlalchemy import text
 from models import Produto
 from database import get_db
 
@@ -28,9 +29,8 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def formatar_numero(valor):
-    return f"{float(valor):.2f}".replace('.', ',')  # Converte para 2 casas decimais e usa vírgula
+    return f"{float(valor):.2f}".replace('.', ',')  # Converte corretamente para 2 casas decimais
 
-# Rota principal para upload de arquivos
 @routes.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
@@ -46,55 +46,47 @@ def index():
         if arquivo and allowed_file(arquivo.filename):
             filename = secure_filename(arquivo.filename)
             os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-            caminho_arquivo = os.path.join(UPLOAD_FOLDER, filename)
-            arquivo.save(caminho_arquivo)
+            file_path = os.path.join(UPLOAD_FOLDER, filename)
+            arquivo.save(file_path)
 
-            try:
-                with open(caminho_arquivo, 'r', encoding='utf-8') as file:
-                    reader = csv.reader(file, delimiter=';')
-                    produtos = []
-                    
-                    db_session = next(get_db())  # Obtém a sessão corretamente
-                    db_session.execute("SET statement_timeout TO 30000;")  # Define o timeout
-                    db_session.query(Produto).delete()
+            with open(file_path, 'r', encoding='utf-8') as file:
+                reader = csv.reader(file, delimiter=';')
+                produtos = []
+                
+                db_session = next(get_db())
+                db_session.execute(text("SET statement_timeout TO 30000;"))
+                db_session.query(Produto).delete()
+                db_session.commit()
+                
+                for row in reader:
+                    try:
+                        if len(row) < 4:
+                            flash(f'Erro: linha inválida {row}', 'error')
+                            continue
+                        
+                        id_produto = row[0].zfill(10)
+                        descricao = row[1]
+                        valor = formatar_numero(row[2])
+                        unidade = row[3]
+                        
+                        produto = Produto(id=int(id_produto), codigo=id_produto, descricao=descricao, valor=valor, unidade=unidade)
+                        db_session.add(produto)
+                        produtos.append(produto)
+                    except (ValueError, IndexError):
+                        flash(f'Erro ao processar linha: {row}', 'error')
+                        continue  
+                
+                if produtos:
                     db_session.commit()
-                    
-                    for row in reader:
-                        try:
-                            id_produto = row[0].zfill(10)  # Mantém zeros à esquerda
-                            descricao = row[1]
-                            valor = formatar_numero(row[2])  # Formata corretamente
-                            unidade = row[3]
+                    cache.delete('produtos_cache')
+                    flash('Arquivo enviado e atualizado com sucesso!', 'success')
+                else:
+                    flash('Nenhum produto processado. Verifique o arquivo.', 'warning')
 
-                            produto = Produto(
-                                id=int(id_produto),
-                                codigo=id_produto,
-                                descricao=descricao,
-                                valor=valor,
-                                unidade=unidade
-                            )
-                            db_session.add(produto)
-                            produtos.append(produto)
-
-                        except (ValueError, IndexError) as e:
-                            flash(f'Erro ao processar linha {row}: {str(e)}', 'error')
-                            continue  # Pula a linha com erro e continua
-                    
-                    if produtos:
-                        db_session.commit()
-                        cache.delete('produtos_cache')  # Limpa o cache ao atualizar
-                        flash('Arquivo enviado e atualizado com sucesso!', 'success')
-                    else:
-                        flash('Nenhum produto processado. Verifique o arquivo.', 'warning')
-                    
-            except Exception as e:
-                db_session.rollback()
-                flash(f'Erro no processamento: {str(e)}', 'error')
-                return redirect(url_for('routes.index'))
-
+            return redirect(url_for('routes.index'))
+    
     return render_template('index.html')
 
-# Rota para obter produtos com paginação e cache
 @routes.route('/produtos', methods=['GET'])
 @cache.cached(timeout=60, key_prefix='produtos_cache')
 def get_produtos():
@@ -102,7 +94,7 @@ def get_produtos():
     per_page = request.args.get('per_page', 10, type=int)
     
     db_session = next(get_db())
-    db_session.execute("SET statement_timeout TO 30000;")
+    db_session.execute(text("SET statement_timeout TO 30000;"))
     produtos = db_session.query(Produto).limit(per_page).offset((page - 1) * per_page).all()
     
     return jsonify([
@@ -115,9 +107,7 @@ def get_produtos():
         } for produto in produtos
     ])
 
-# Registra o Blueprint no Flask
 app.register_blueprint(routes)
 
-# Executa a aplicação
 if __name__ == '__main__':
     app.run(debug=True, threaded=True)
