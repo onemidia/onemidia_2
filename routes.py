@@ -29,8 +29,7 @@ def allowed_file(filename):
 
 # Função para formatar os números corretamente
 def formatar_numero(valor):
-    valor = valor.replace('.', ',')  # Substitui pontos por vírgulas
-    return valor.zfill(10)  # Garante 10 dígitos com zeros à esquerda
+    return f"{float(valor):.2f}".replace('.', ',')  # Converte corretamente para 2 casas decimais
 
 # Rota principal para upload de arquivos
 @routes.route('/', methods=['GET', 'POST'])
